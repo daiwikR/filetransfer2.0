@@ -3,13 +3,13 @@ import struct
 import os
 import sys
 
-from utils import checksum_bytes, unpack_chunk
+from utils import checksum_bytes
 
 HOST = '127.0.0.1'
 PORT = 9001
 
-# header is always 8 bytes: seq_num (4) + chunk_len (4)
-HEADER_SIZE = struct.calcsize('>II')
+# header is 12 bytes: seq_num (4) + chunk_len (4) + checksum (4)
+HEADER_SIZE = struct.calcsize('>III')
 
 
 def recv_exact(sock, n):
@@ -41,13 +41,19 @@ def receive_chunks(sock):
     received = {}
     while True:
         header = recv_exact(sock, HEADER_SIZE)
-        seq_num, chunk_len = struct.unpack('>II', header)
+        seq_num, chunk_len, stored_csum = struct.unpack('>III', header)
 
         # 0xFFFFFFFF is the end-of-transmission sentinel
         if seq_num == 0xFFFFFFFF:
             break
 
         data = recv_exact(sock, chunk_len)
+
+        # verify chunk checksum — if it's wrong, skip it so it stays missing
+        actual_csum = sum(data) & 0xFFFFFFFF
+        if actual_csum != stored_csum:
+            continue
+
         received[seq_num] = data
 
     return received

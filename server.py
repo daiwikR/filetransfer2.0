@@ -78,17 +78,16 @@ def handle_client(conn, addr):
 
 
 def _send_chunks(conn, chunks):
-    # send each chunk through the error simulator before putting it on the wire
+    # pack first so checksum is computed on clean data, then run error sim on the packet
     for seq_num, data in chunks.items():
-        should_drop, possibly_corrupted = simulate_error(data, DROP_RATE, CORRUPT_RATE)
+        packet = pack_chunk(seq_num, data)
+        should_drop, packet = simulate_error(packet, DROP_RATE, CORRUPT_RATE)
         if should_drop:
-            # just skip it, client will notice it's missing
             continue
-        packet = pack_chunk(seq_num, possibly_corrupted)
         send_all(conn, packet)
 
-    # END marker so client knows we're done sending this round
-    end_packet = struct.pack('>II', 0xFFFFFFFF, 0)
+    # END marker — 12 bytes to match the new header size (seq, len, csum all zero-ish)
+    end_packet = struct.pack('>III', 0xFFFFFFFF, 0, 0)
     send_all(conn, end_packet)
 
 
