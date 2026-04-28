@@ -24,7 +24,8 @@ def handle_client(conn, addr):
     print(f"[+] connection from {addr}")
     try:
         # first thing client sends is the filename it wants
-        filename = conn.recv(1024).decode().strip()
+        # using _recv_line so a TCP split doesn't give us a partial filename
+        filename = _recv_line(conn)
         print(f"[*] {addr} requesting: {filename}")
 
         if not os.path.exists(filename):

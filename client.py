@@ -103,6 +103,7 @@ def transfer(filename, output_path=None):
     print(f"[*] got {len(received)}/{total_chunks} chunks on first pass")
 
     # retransmit loop
+    MAX_RETRIES = 10
     retries = 0
     while True:
         missing = find_missing(received, total_chunks)
@@ -112,6 +113,11 @@ def transfer(filename, output_path=None):
             print(f"[*] all chunks received after {retries} retransmit round(s)")
             break
 
+        if retries >= MAX_RETRIES:
+            print(f"[!] gave up after {MAX_RETRIES} retransmit rounds, still missing {len(missing)} chunks")
+            sock.close()
+            return False
+
         print(f"[*] missing {len(missing)} chunks, requesting retransmit")
         request = ','.join(str(s) for s in missing) + '\n'
         sock.sendall(request.encode())
@@ -119,8 +125,6 @@ def transfer(filename, output_path=None):
         new_chunks = receive_chunks(sock)
         received.update(new_chunks)
         retries += 1
-
-        # TODO: add a max retries limit so this doesn't loop forever if something breaks
 
     sock.close()
 
