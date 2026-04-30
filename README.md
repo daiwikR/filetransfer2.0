@@ -6,11 +6,12 @@ Multi-client file transfer over TCP with SHA256 checksum verification and simula
 
 ## What it does
 
-- Transfers files from a server to one or more clients over TCP
-- Splits files into 1024-byte chunks, sends them with sequence numbers
+- Client uploads a file to the server over TCP, server sends it back in chunks
+- Splits files into 1024-byte chunks, tagged with sequence number and client ID
 - Simulates dropped and corrupted packets (configurable rates)
 - Client detects missing/corrupt chunks and requests retransmission
 - Verifies the final file against a SHA256 checksum before saving
+- Multiple clients can connect at the same time — each gets its own thread so they don't step on each other
 
 ---
 
@@ -56,34 +57,39 @@ Crank these up to stress-test the retransmit logic. Setting both to `0.0` gives 
 ## Protocol design
 
 ```
-client                         server
-  |                               |
-  |-- "path/to/file.txt\n" -----> |
-  |                               |
-  | <-- "sha256hash,numchunks\n"  |
-  |                               |
-  | <-- [chunk][chunk][chunk]...  |  (some may be dropped or corrupted)
-  | <-- [END packet]              |
-  |                               |
-  |-- "3,7,21\n" (missing) -----> |  OR  "OK\n" if all arrived clean
-  |                               |
-  | <-- [chunk 3][chunk 7]...     |
-  | <-- [END packet]              |
-  |                               |
-  |-- "OK\n" ------------------> |
+client                              server
+  |                                    |
+  | <-- client_id (4 bytes) ---------- |  server assigns on connect
+  |                                    |
+  |-- "filename\n" -----------------> |
+  |-- file_size (8 bytes, uint64) --> |
+  |-- [file bytes] -----------------> |  upload
+  |                                    |
+  | <-- "sha256hash,numchunks\n" ----- |
+  |                                    |
+  | <-- [chunk][chunk][chunk]...       |  (some may be dropped or corrupted)
+  | <-- [END packet]                   |
+  |                                    |
+  |-- "3,7,21\n" (missing) ---------> |  OR  "OK\n" if all arrived clean
+  |                                    |
+  | <-- [chunk 3][chunk 7]...          |
+  | <-- [END packet]                   |
+  |                                    |
+  |-- "OK\n" ------------------------> |
 ```
 
-**Chunk format** (12 bytes header + data):
+**Chunk format** (16 bytes header + data):
 ```
-[4 bytes: seq_num, big-endian uint32]
+[4 bytes: seq_num,   big-endian uint32]
+[4 bytes: client_id, big-endian uint32]
 [4 bytes: chunk_len, big-endian uint32]
-[4 bytes: checksum, sum of data bytes mod 2^32]
+[4 bytes: checksum,  sum of data bytes mod 2^32]
 [N bytes: data]
 ```
 
-**END packet**: `seq_num = 0xFFFFFFFF`, `chunk_len = 0`, sent after every batch.
+**END packet**: `seq_num = 0xFFFFFFFF`, all other fields zero, sent after every batch.
 
-The client stores chunks in a `dict {seq_num: data}` as they arrive. After each round it figures out which sequence numbers are missing (or had bad checksums) and sends those back as a comma-separated string. This repeats until the client has every chunk, then it reassembles in order and verifies the full-file SHA256.
+The client stores chunks in a `dict {seq_num: data}` as they arrive. After each round it checks which sequence numbers are missing (or had bad checksums) and sends those back as a comma-separated string. Repeats until all chunks are accounted for, then reassembles in order and checks the full-file SHA256.
 
 ---
 
