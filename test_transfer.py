@@ -8,7 +8,7 @@ import sys
 
 from client import transfer
 
-# where to put test files so they don't clutter the root
+# where to put test files
 TEST_DIR = "test_files"
 
 
@@ -17,7 +17,7 @@ def setup():
 
 
 def teardown():
-    # clean up everything we created during tests
+    # clean up
     for f in os.listdir(TEST_DIR):
         os.remove(os.path.join(TEST_DIR, f))
     os.rmdir(TEST_DIR)
@@ -49,7 +49,7 @@ def start_server():
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
-    # give it a moment to actually bind — hacky but works
+    # hacky but works
     time.sleep(0.5)
     return proc
 
@@ -82,7 +82,7 @@ def test_medium_file(label="medium file (~512KB)"):
 
 
 def test_exact_chunk_boundary(label="file exactly divisible by chunk size"):
-    # 1024 * 8 = 8192 bytes — want to make sure we don't get an off-by-one
+    
     path = make_file("exact.bin", 1024 * 8)
     original_hash = file_sha256(path)
 
@@ -120,8 +120,8 @@ def test_multi_client(label="two clients simultaneously"):
     print(f"  [pass] {label}")
 
 
-def test_file_not_found(label="server returns error for missing file"):
-    # server should send an error line, transfer() should return False
+def test_file_not_found(label="client returns False for missing local file"):
+    # client now opens the file itself, so failure happens before we even connect
     ok = transfer("this_file_does_not_exist.bin", "received_nope.bin")
     assert not ok, "expected transfer to return False for missing file"
     assert not os.path.exists("received_nope.bin"), "output file should not be created"
