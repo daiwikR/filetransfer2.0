@@ -108,6 +108,6 @@ The client stores chunks in a `dict {seq_num: data}` as they arrive. After each 
 
 - Tested up to around 10MB — larger files should work since it streams in 64KB blocks, but haven't actually verified
 - Error simulation is artificial (random rolls per chunk), not how real packet loss behaves on a network
-- No authentication or encryption — not in scope for this assignment
-- If the server crashes mid-transfer the client will hang waiting for more data — would need a socket timeout to handle that properly
+- No authentication or encryption 
+- If the server crashes mid-transfer the client will hang waiting for more data
 - `DROP_RATE` and `CORRUPT_RATE` are global, so all connected clients get the same error rates
