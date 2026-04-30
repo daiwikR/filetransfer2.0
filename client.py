@@ -3,17 +3,14 @@ import struct
 import os
 import sys
 
-from utils import checksum_bytes
+from utils import checksum_bytes, HEADER_SIZE
 
 HOST = '127.0.0.1'
 PORT = 9001
 
-# header is 12 bytes: seq_num (4) + chunk_len (4) + checksum (4)
-HEADER_SIZE = struct.calcsize('>III')
-
 
 def recv_exact(sock, n):
-    # TCP doesn't guarantee we get n bytes in one recv call, so loop until we have them
+    # TCP doesn't guarantee we get n bytes in a single loop so loop until we have them
     buf = b''
     while len(buf) < n:
         chunk = sock.recv(n - len(buf))
@@ -22,9 +19,8 @@ def recv_exact(sock, n):
         buf += chunk
     return buf
 
-
 def recv_line(sock):
-    # read byte by byte until newline, used for the metadata line
+    # read byte by byte until newline
     buf = b''
     while True:
         byte = sock.recv(1)
@@ -36,20 +32,25 @@ def recv_line(sock):
     return buf.decode().strip()
 
 
-def receive_chunks(sock):
+
+def grab_chunks(sock, expected_client_id):
     # collect chunks into a dict until we hit the END marker
     received = {}
     while True:
         header = recv_exact(sock, HEADER_SIZE)
-        seq_num, chunk_len, stored_csum = struct.unpack('>III', header)
+        seq_num, chunk_client_id, chunk_len, stored_csum = struct.unpack('>IIII', header)
 
-        # 0xFFFFFFFF is the end-of-transmission sentinel
+
         if seq_num == 0xFFFFFFFF:
             break
 
         data = recv_exact(sock, chunk_len)
 
-        # verify chunk checksum — if it's wrong, skip it so it stays missing
+        # check if the TCP connection is proper
+        if chunk_client_id != expected_client_id:
+            continue
+
+        # verify chunk checksum just drop if its wrong
         actual_csum = sum(data) & 0xFFFFFFFF
         if actual_csum != stored_csum:
             continue
@@ -58,33 +59,48 @@ def receive_chunks(sock):
 
     return received
 
-
 def find_missing(received, total_chunks):
     # just check which seq numbers we never got
     return [i for i in range(total_chunks) if i not in received]
 
 
 def reassemble(received, total_chunks):
-    # stitch chunks back together in order
+    # rearrange the chucks in order
     parts = []
     for i in range(total_chunks):
         parts.append(received[i])
     return b''.join(parts)
 
-
 def transfer(filename, output_path=None):
     if output_path is None:
-        # default: save as "received_<original filename>" in current dir
+        # im going to  save as "received_<original filename>" in current dir
         output_path = "received_" + os.path.basename(filename)
+
+    try:
+        with open(filename, 'rb') as f:
+            file_data = f.read()
+    except FileNotFoundError:
+        print(f"[!] file not found: {filename}")
+        return False
+
+    file_size = len(file_data)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect((HOST, PORT))
     print(f"[*] connected to {HOST}:{PORT}")
 
-    # tell server what file we want
-    sock.sendall((filename + '\n').encode())
+    # server immediately sends our assigned client_id
+    raw_id = recv_exact(sock, 4)
+    client_id = struct.unpack('>I', raw_id)[0]
+    print(f"[*] assigned client_id={client_id}")
 
-    # first response is "checksum,total_chunks"
+    # upload: send filename, then file size, then the actual bytes
+    sock.sendall((os.path.basename(filename) + '\n').encode())
+    sock.sendall(struct.pack('>Q', file_size))
+    sock.sendall(file_data)
+    print(f"[*] uploaded {file_size} bytes")
+
+    # server responds with checksum and chunk count
     meta = recv_line(sock)
 
     if meta.startswith("ERROR"):
@@ -99,7 +115,7 @@ def transfer(filename, output_path=None):
     received = {}
 
     # first pass — get whatever the server sends (some might be dropped/corrupted)
-    received.update(receive_chunks(sock))
+    received.update(grab_chunks(sock, client_id))
     print(f"[*] got {len(received)}/{total_chunks} chunks on first pass")
 
     # retransmit loop
@@ -122,15 +138,15 @@ def transfer(filename, output_path=None):
         request = ','.join(str(s) for s in missing) + '\n'
         sock.sendall(request.encode())
 
-        new_chunks = receive_chunks(sock)
+        new_chunks = grab_chunks(sock, client_id)
         received.update(new_chunks)
         retries += 1
 
     sock.close()
 
     # put the file back together and check the hash
-    file_data = reassemble(received, total_chunks)
-    actual_checksum = checksum_bytes(file_data)
+    rebuilt = reassemble(received, total_chunks)
+    actual_checksum = checksum_bytes(rebuilt)
 
     if actual_checksum != expected_checksum:
         print(f"[!] checksum mismatch — file is corrupt")
@@ -139,9 +155,9 @@ def transfer(filename, output_path=None):
         return False
 
     with open(output_path, 'wb') as f:
-        f.write(file_data)
+        f.write(rebuilt)
 
-    print(f"[+] file saved to {output_path} ({len(file_data)} bytes), checksum OK")
+    print(f"[+] file saved to {output_path} ({len(rebuilt)} bytes), checksum OK")
     return True
 
 
