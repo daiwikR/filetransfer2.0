@@ -2,37 +2,38 @@ import hashlib
 import random
 import struct
 
-# chunk size felt reasonable after reading some SO posts, 1024 bytes
+
 CHUNK_SIZE = 1024
 
-# these can be tweaked from server.py, keeping defaults here for reference
+# these can be tweaked from server.py
 DROP_RATE = 0.1
 CORRUPT_RATE = 0.05
 
+# header: seq_num (4) + client_id (4) + chunk_len (4) + checksum (4) = 16 bytes
+HEADER_SIZE = struct.calcsize('>IIII')
+
 
 def _chunk_csum(data):
-    # simple sum of all bytes mod 2^32, good enough to catch single-byte flips
+    # simple sum of all bytes works to catch single-byte flips
     return sum(data) & 0xFFFFFFFF
 
-
-def pack_chunk(seq_num, data):
-    # header: seq_num, data length, checksum of the original data
+def pack_chunk(seq_num, client_id, data):
+    # header stores client_id so the receiver can verify the chunk belongs to it
     csum = _chunk_csum(data)
-    header = struct.pack('>III', seq_num, len(data), csum)
+    header = struct.pack('>IIII', seq_num, client_id, len(data), csum)
     return header + data
 
 
 def unpack_chunk(raw):
-    # header is now 12 bytes (4 + 4 + 4)
-    header_size = struct.calcsize('>III')
-    seq_num, chunk_len, stored_csum = struct.unpack('>III', raw[:header_size])
-    data = raw[header_size:header_size + chunk_len]
+    seq_num, client_id, chunk_len, stored_csum = struct.unpack('>IIII', raw[:HEADER_SIZE])
+    data = raw[HEADER_SIZE:HEADER_SIZE + chunk_len]
     is_corrupt = (_chunk_csum(data) != stored_csum)
-    return seq_num, chunk_len, data, is_corrupt
+    return seq_num, client_id, chunk_len, data, is_corrupt
+
 
 
 def file_checksum(filepath):
-    # compute sha256 on the whole file before we split it up
+    # compute sha256 on the whole file — used when hashing from disk
     h = hashlib.sha256()
     with open(filepath, 'rb') as f:
         while True:
@@ -44,16 +45,11 @@ def file_checksum(filepath):
 
 
 def checksum_bytes(data: bytes):
-    # sometimes need to hash raw bytes directly (for verifying reassembled file)
+    # sometimes need to hash raw bytes directly (for the uploaded data or reassembled file)
     return hashlib.sha256(data).hexdigest()
 
-
 def simulate_error(packet, drop_rate=DROP_RATE, corrupt_rate=CORRUPT_RATE):
-    """
-    takes a fully packed packet, returns (should_drop, possibly_corrupted_packet)
-    corruption flips a byte in the data portion only — header stays intact
-    so the client can still detect it as corrupt via the checksum field
-    """
+    # roll the dice — drop the packet or mess up some bytes
     roll = random.random()
 
     if roll < drop_rate:
@@ -68,13 +64,12 @@ def simulate_error(packet, drop_rate=DROP_RATE, corrupt_rate=CORRUPT_RATE):
 
 
 def _flip_bytes_in_payload(packet):
-    # header is 12 bytes, only corrupt the data portion after that
-    header_size = struct.calcsize('>III')
-    if len(packet) <= header_size:
+    # header is HEADER_SIZE bytes, only corrupt the data portion after that
+    if len(packet) <= HEADER_SIZE:
         return packet
 
     ba = bytearray(packet)
     # TODO: maybe flip more bytes to make it a harder test case
-    idx = random.randint(header_size, len(ba) - 1)
+    idx = random.randint(HEADER_SIZE, len(ba) - 1)
     ba[idx] ^= 0xFF
     return bytes(ba)
